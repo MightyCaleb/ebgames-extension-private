@@ -1,0 +1,41 @@
+{
+  "manifest_version": 3,
+  "name": "Michael Caleb EB GAMES AUTO CHECKOUT V 6.9 - Stable Core",
+  "version": "1.8.0",
+  "description": "Stable orchestration refactor with guarded runs, deduplicated results, parallel product tabs, and sequential cart-refresh handling.",
+  "permissions": [
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://www.ebgames.com.au/*"
+  ],
+  "action": {
+    "default_title": "Michael Caleb EB GAMES AUTO CHECKOUT V 6.9",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.ebgames.com.au/product/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://www.ebgames.com.au/shopping-cart*",
+        "https://www.ebgames.com.au/cart*"
+      ],
+      "js": [
+        "cart.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "background": {
+    "service_worker": "background.js"
+  }
+}

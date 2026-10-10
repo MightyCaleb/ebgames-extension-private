@@ -1,0 +1,14 @@
+EB Games Auto Checkout — Stable Core v1.8.0
+
+This is a low-risk backend/orchestration refactor based on the v1.7.1 baseline.
+
+Changes:
+- Preserves the tested product-page and sequential cart-refresh scripts unchanged.
+- Guards against starting overlapping product-tab runs from the popup.
+- Centralises result queuing and makes background result recording idempotent.
+- Closes a confirmed product tab only when its result belongs to the active run.
+- Makes popup start-state handling more explicit.
+
+Not changed: checkout/payment automation, cart quantity event semantics, product click semantics, refresh wait timings.
+
+This build has not been live-tested against EB Games. Verify every visible quantity and cart total manually.
