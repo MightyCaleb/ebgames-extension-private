@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Michael Caleb EB GAMES AUTO CHECKOUT V 6.9 - Discord Notifications",
-  "version": "1.9.0",
-  "description": "Stable Core with parallel product tabs, sequential cart-refresh handling, timing diagnostics, and optional Discord webhook notifications.",
+  "name": "Michael Caleb EB GAMES AUTO CHECKOUT V 6.9",
+  "version": "1.9.8",
+  "description": "Fixes Add product button after removing the test-template UI. Includes Discord product notifications, account detection, local time, and sequential cart quantity updates.",
   "permissions": [
     "storage",
     "tabs"

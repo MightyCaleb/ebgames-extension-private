@@ -8,12 +8,6 @@ let saveTimer = null;
 let startInProgress = false;
 
 const DEFAULT_CART = "https://www.ebgames.com.au/shopping-cart";
-const TEST_TEMPLATE = [
-  { url: "https://www.ebgames.com.au/product/toys-and-collectibles/383499-pokemon-tcg-mega-evolution-delta-reign-booster", qty: 36 },
-  { url: "https://www.ebgames.com.au/product/ps5/287986-playstation-5-dualsense-wireless-controller-gray-camouflage", qty: 1 },
-  { url: "https://www.ebgames.com.au/product/ps5/330056-grand-theft-auto-vi", qty: 5 }
-];
-
 function newRow(url = "", qty = 1, id = crypto.randomUUID()) {
   return { id, url, qty };
 }
@@ -101,14 +95,6 @@ async function loadPopup() {
   await updateStartAvailability();
 }
 
- document.getElementById("template").addEventListener("click", async () => {
-  if (!confirm("Load the 3-product test template? This replaces the current product list with Pokémon ×36, DualSense controller ×1, and GTA VI ×5.")) return;
-  rows = TEST_TEMPLATE.map(item => newRow(item.url, item.qty));
-  renderRows();
-  await saveRows();
-  statusEl.textContent = "3-product test template loaded and saved. Quantities: Pokémon 36, DualSense controller 1, GTA VI 5.";
-});
-
 document.getElementById("add").addEventListener("click", async () => {
   await saveRows();
   rows.push(newRow());
@@ -123,20 +109,6 @@ document.getElementById("clear").addEventListener("click", async () => {
   statusEl.textContent = "List cleared.";
 });
 document.getElementById("cart").addEventListener("click", () => chrome.tabs.create({ url: DEFAULT_CART }));
-document.getElementById("retry").addEventListener("click", async () => {
-  const tabs = await chrome.tabs.query({ url: ["https://www.ebgames.com.au/shopping-cart*", "https://www.ebgames.com.au/cart*"] });
-  if (!tabs.length) {
-    statusEl.textContent = "Open the EB Games shopping cart first, then click Retry cart quantities.";
-    return;
-  }
-  const tab = tabs.find(candidate => candidate.active) || tabs[0];
-  try {
-    await chrome.tabs.sendMessage(tab.id, { type: "EBMO_RUN_CART_QUANTITIES" });
-    statusEl.textContent = "Retrying quantity updates once in the open cart…";
-  } catch {
-    statusEl.textContent = "Could not contact the cart script. Reload the cart tab once, wait for it to finish loading, then retry.";
-  }
-});
 
 startButton.addEventListener("click", async () => {
   if (startInProgress) return;

@@ -19,24 +19,21 @@ input{width:72px;padding:7px;border:1px solid #c6cbd1;border-radius:6px}
 #discordStatus{font-size:11px;color:#5f6368;white-space:pre-wrap;margin-top:7px}
 button{border:0;border-radius:7px;padding:9px 11px;cursor:pointer;font-weight:700}
 .remove{background:#fce8e6;color:#a50e0e;padding:7px}
-#add{background:#f1f3f4;color:#202124}#template{background:#e8f0fe;color:#174ea6;width:100%;margin-top:8px}#start{width:100%;background:#d71920;color:white;margin-top:8px}
+#add{background:#f1f3f4;color:#202124}#start{width:100%;background:#d71920;color:white;margin-top:8px}
 #cart{width:100%;background:#202124;color:white;margin-top:7px}
-#retry{width:100%;background:#e8f0fe;color:#174ea6;margin-top:7px}
 #status{font-size:12px;margin-top:10px;white-space:pre-wrap;line-height:1.4}
 .footer{font-size:11px;color:#6b7280;margin-top:10px}
 </style></head><body>
-<div class="top"><h2>Michael Caleb EB GAMES AUTO CHECKOUT V 6.9</h2><span class="pill">Core v1.9.0</span></div>
-<p>Stable Core v1.9.0. Paste product links or load your saved 3-product test template. Product pages open in parallel; each adds one unit, then the cart opens for quantity updates. Your list auto-saves.</p>
+<div class="top"><h2>Michael Caleb EB GAMES AUTO CHECKOUT V 6.9</h2><span class="pill">Core v1.9.7</span></div>
+<p>Paste product links and quantities. Product pages open in parallel; each adds one unit, then the cart opens for quantity updates. Your list auto-saves.</p>
 <div id="items"></div>
 <div class="row"><button id="add">+ Add product</button><button id="clear" class="remove">Clear list</button></div>
-<button id="template">Load 3-product test template</button>
 <button id="start">Start adding to cart</button>
 <button id="cart">Open shopping cart</button>
-<button id="retry">Retry cart quantities</button>
 <div id="status"></div>
 <section class="discord">
   <h3>Discord notifications</h3>
-  <p>Paste a Discord webhook URL to receive product-add results and the final cart quantity report. The URL is saved locally in this Chrome profile and is not included in the source ZIP.</p>
+  <p>Paste a Discord webhook URL to receive rich product-add notifications. The URL is saved locally in this Chrome profile and is not included in the source ZIP.</p>
   <label for="discordWebhook">Webhook URL</label>
   <input id="discordWebhook" type="password" autocomplete="off" spellcheck="false" placeholder="https://discord.com/api/webhooks/…" />
   <div class="discord-actions"><button id="saveDiscord">Save webhook</button><button id="testDiscord">Test notification</button></div>

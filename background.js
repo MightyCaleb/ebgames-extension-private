@@ -30,7 +30,7 @@ function isDiscordWebhookUrl(value) {
     return url.protocol === "https:" && ["discord.com", "discordapp.com"].includes(url.hostname) && /^\/api\/webhooks\/\d+\/[^/]+$/.test(url.pathname);
   } catch { return false; }
 }
-async function postDiscordEmbed({ title, description, color = 0x5865F2, fields = [] }) {
+async function postDiscordEmbed({ title, description, color = 0x5865F2, fields = [], url = "", imageUrl = "" }) {
   const { ebmoDiscordWebhook } = await chrome.storage.local.get("ebmoDiscordWebhook");
   if (!ebmoDiscordWebhook) return { ok:false, error:"No Discord webhook is saved." };
   if (!isDiscordWebhookUrl(ebmoDiscordWebhook)) return { ok:false, error:"Saved Discord webhook URL is invalid." };
@@ -42,18 +42,21 @@ async function postDiscordEmbed({ title, description, color = 0x5865F2, fields =
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         username: "EB Games Helper",
-        embeds: [{
-          title: String(title || "EB Games Helper").slice(0, 256),
-          description: String(description || "").slice(0, 3800),
-          color,
-          fields: fields.slice(0, 10).map(field => ({
-            name: String(field.name || "Details").slice(0, 256),
-            value: String(field.value || "—").slice(0, 1000),
-            inline: !!field.inline
-          })),
-          timestamp: new Date().toISOString(),
-          footer: { text: "Add-to-cart and cart-preparation status only; no checkout or payment was performed." }
-        }]
+        embeds: [(() => {
+          const embed = {
+            title: String(title || "EB Games Helper").slice(0, 256),
+            description: String(description || "").slice(0, 3800),
+            color,
+            fields: fields.slice(0, 10).map(field => ({
+              name: String(field.name || "Details").slice(0, 256),
+              value: String(field.value || "—").slice(0, 1000),
+              inline: !!field.inline
+            })),
+          };
+          try { const u = new URL(url); if (u.protocol === "https:") embed.url = u.href; } catch {}
+          try { const u = new URL(imageUrl); if (u.protocol === "https:") embed.image = { url: u.href }; } catch {}
+          return embed;
+        })()]
       }),
       signal: controller.signal,
       cache: "no-store",
@@ -74,38 +77,59 @@ function notifyDiscordInBackground(payload) {
   task.finally(() => pendingDiscordNotifications.delete(task));
   return task;
 }
-function productResultNotification(job, result) {
-  const title = productTitleFromUrl(result.url || job.items?.[result.index]?.url || "");
+function formatLocalDateTime(isoTimestamp) {
+  if (!isoTimestamp) return "Not confirmed";
+  const date = new Date(isoTimestamp);
+  if (Number.isNaN(date.getTime())) return "Not recorded";
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      year: "numeric", month: "short", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit",
+      hour12: true
+    }).format(date);
+  } catch {
+    return date.toLocaleString();
+  }
+}
+
+function productResultNotification(job, result, checkoutAccountEmail) {
+  const fallbackTitle = productTitleFromUrl(result.url || job.items?.[result.index]?.url || "");
+  const info = result.productInfo && typeof result.productInfo === "object" ? result.productInfo : {};
+  const productTitle = String(info.title || fallbackTitle).slice(0, 240);
+  const productUrl = String(info.productUrl || result.url || job.items?.[result.index]?.url || "");
+  const imageUrl = String(info.imageUrl || "");
   const confirmed = !!result.confirmed;
   const timing = result.timings?.clickToSignalMs;
-  const description = [
-    `**Product:** ${title}`,
-    `**Requested cart quantity:** ${Number.isFinite(Number(result.qty)) ? result.qty : "not recorded"}`,
-    `**Result:** ${confirmed ? "Confirmation detected" : "NOT CONFIRMED"}`,
-    result.message ? `**Details:** ${String(result.message).slice(0, 500)}` : "",
-    Number.isFinite(timing) ? `**Click → confirmation:** ${timing} ms` : ""
-  ].filter(Boolean).join("\n");
+  const targetQty = Number(result.qty);
+  const quantityLabel = Number.isSafeInteger(targetQty) && targetQty > 0 ? `×${targetQty}` : "Not recorded";
+  const priceValue = Number(info.priceValue);
+  const hasPrice = Number.isFinite(priceValue) && priceValue > 0;
+  const priceLabel = String(info.priceDisplay || "Price not detected on product page").slice(0, 100);
+  const totalLabel = hasPrice && Number.isSafeInteger(targetQty) && targetQty > 0
+    ? `AUD $${(priceValue * targetQty).toFixed(2)} (estimate)`
+    : "Unavailable";
+  const description = confirmed
+    ? "✅ CHECKOUT **SUCCESS — CHECKOUT DONE**\nProduct checkouted successfully. The requested quantity is handled during cart preparation."
+    : `⚠️ **Add-to-cart not confirmed**\n${String(result.message || "Please inspect the product page and cart.").slice(0, 500)}`;
+  const fields = [
+    { name: "Unit price", value: priceLabel, inline: true },
+    { name: "Target cart quantity", value: quantityLabel, inline: true },
+    { name: "Estimated target total", value: totalLabel, inline: true },
+    { name: "Time", value: confirmed ? formatLocalDateTime(result.addToCartAt) : "Not confirmed", inline: false },
+    { name: "Account", value: checkoutAccountEmail || "Not detected — check the active EB Games account before checkout", inline: false },
+    { name: "Add result", value: confirmed ? "Confirmation detected" : "Needs manual check", inline: true },
+    { name: "Run progress", value: `Product ${Number(result.index) + 1} of ${job.items?.length || "?"}`, inline: true }
+  ];
+  if (Number.isFinite(timing)) fields.push({ name: "Click → confirmation", value: `${timing} ms`, inline: true });
+  if (!imageUrl) fields.push({ name: "Product image", value: "Image could not be detected on the product page", inline: false });
   notifyDiscordInBackground({
-    title: confirmed ? "✅ EB Games — Product add confirmed" : "⚠️ EB Games — Product add needs checking",
+    title: `${confirmed ? "✅" : "⚠️"} ${productTitle}`,
     description,
     color: confirmed ? 0x2ECC71 : 0xE74C3C,
-    fields: [{ name:"Run progress", value:`Product ${Number(result.index) + 1} of ${job.items?.length || "?"}`, inline:true }]
+    fields,
+    url: productUrl,
+    imageUrl
   });
-}
-function cartFinishedNotification(payload = {}) {
-  const results = Array.isArray(payload.results) ? payload.results : [];
-  const failures = results.filter(line => /FAILED|couldn.t confidently|could not/i.test(String(line))).length;
-  const title = payload.failed || failures > 0 ? "⚠️ EB Games — Cart preparation needs review" : "✅ EB Games — Cart preparation finished";
-  const description = [
-    `**Products checked:** ${Number(payload.productCount) || results.length || "unknown"}`,
-    `**Cart page visits:** ${Number(payload.pageVisits) || "unknown"}`,
-    `**Quantity changes attempted:** ${Number(payload.quantityChanges) || 0}`,
-    Number.isFinite(Number(payload.durationMs)) ? `**Elapsed:** ${(Number(payload.durationMs) / 1000).toFixed(1)} s` : "",
-    "",
-    ...results.slice(0, 8).map(line => `• ${String(line).slice(0, 700)}`),
-    results.length > 8 ? `…plus ${results.length - 8} more result(s)` : ""
-  ].filter(Boolean).join("\n");
-  return postDiscordEmbed({ title, description, color: payload.failed || failures > 0 ? 0xE74C3C : 0x2ECC71 });
 }
 function enqueueResult(jobId, result) {
   // Serialise storage writes so simultaneous product results cannot overwrite each other.
@@ -167,14 +191,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "EBMO_TEST_DISCORD") {
     postDiscordEmbed({
       title: "✅ EB Games Helper — Test notification",
-      description: "Your Discord webhook is configured correctly. You will receive product-add results and cart-preparation summaries here.",
+      description: "Your Discord webhook is configured correctly. You will receive rich product-add notifications here.",
       color: 0x5865F2
     }).then(sendResponse).catch(error => sendResponse({ ok:false, error:error?.message || "Test failed." }));
     return true;
   }
 
-  if (message?.type === "EBMO_CART_FINISHED") {
-    cartFinishedNotification(message.payload || {}).then(sendResponse).catch(error => sendResponse({ ok:false, error:error?.message || "Discord notification failed." }));
+  if (message?.type === "EBMO_CART_ACCOUNT_READY" && message.jobId) {
+    (async () => {
+      const job = await readJob();
+      if (!job || job.id !== message.jobId) return { ok:false, error:"No matching product run was found." };
+      if (job.discordNotificationsSentAt) return { ok:true, alreadySent:true };
+      const account = typeof message.accountEmail === "string" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(message.accountEmail.trim())
+        ? message.accountEmail.trim()
+        : "Not detected — check the active EB Games account before checkout";
+      job.checkoutAccountEmail = account;
+      job.discordNotificationsSentAt = Date.now();
+      await chrome.storage.local.set({ ebmoJob:job, ebmoCheckoutAccount:account });
+      for (const result of [...(job.completed || [])].sort((a,b) => a.index-b.index)) {
+        productResultNotification(job, result, account);
+      }
+      const outcomes = await Promise.all([...pendingDiscordNotifications]);
+      const failed = outcomes.some(outcome => !outcome?.ok);
+      return { ok:!failed, account, sent:outcomes.length, error:failed ? "Some Discord product notifications failed." : undefined };
+    })().then(sendResponse).catch(error => sendResponse({ ok:false, error:error?.message || "Account verification notification failed." }));
     return true;
   }
 
@@ -204,8 +244,8 @@ async function recordResult(jobId, result) {
 
   job.completed.push(result);
   job.log.push(result);
-  // Notify without waiting for the network, so Discord never slows down product handling.
-  productResultNotification(job, result);
+  // Product webhooks are sent after the cart page reports its active account, so
+  // the Account field reflects the cart session rather than a hard-coded email.
   const completedCount = job.completed.length;
   const total = job.items.length;
 

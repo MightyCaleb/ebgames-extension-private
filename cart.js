@@ -11,6 +11,47 @@
   async function getState() { return (await chrome.storage.local.get(STATE_KEY))[STATE_KEY] || null; }
   async function putState(state) { await chrome.storage.local.set({[STATE_KEY]:state}); }
 
+  function extractVisibleAccountEmail() {
+    const text = document.body?.innerText || "";
+    const emails = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || [];
+    return emails.length ? emails[0].trim() : null;
+  }
+
+  function profileToggleCandidates() {
+    const clickables = [...document.querySelectorAll('button,a,[role="button"],[aria-haspopup]')].filter(visible);
+    return clickables.filter(el => {
+      const text = `${el.innerText || ""} ${el.getAttribute("aria-label") || ""} ${el.getAttribute("title") || ""}`.replace(/\s+/g, " ").trim();
+      if (!text || /log ?out|sign ?out|checkout|cart/i.test(text)) return false;
+      return /\blevel\s*(?:i{1,3}|iv|v|[0-9]+)\b/i.test(text) || /\b(my account|account profile|member profile|profile menu)\b/i.test(text);
+    });
+  }
+
+  async function detectCartAccountEmail() {
+    const direct = extractVisibleAccountEmail();
+    if (direct) return direct;
+
+    // The EB Games profile email is shown in its account panel. Open only the
+    // profile/member toggle (never logout or checkout), read the visible email,
+    // then dismiss the panel before modifying quantities.
+    const toggle = profileToggleCandidates()[0];
+    if (toggle) {
+      try {
+        toggle.click();
+        await sleep(350);
+        const email = extractVisibleAccountEmail();
+        const closers = [...document.querySelectorAll('[role="dialog"] button,[aria-modal="true"] button,button[aria-label*="close" i],button[title*="close" i]')]
+          .filter(visible)
+          .filter(el => /close|dismiss|×|✕/i.test(`${el.innerText || ""} ${el.getAttribute("aria-label") || ""} ${el.getAttribute("title") || ""}`));
+        if (closers.length) closers[0].click();
+        else document.dispatchEvent(new KeyboardEvent("keydown", {key:"Escape", bubbles:true}));
+        return email || null;
+      } catch {
+        try { document.dispatchEvent(new KeyboardEvent("keydown", {key:"Escape", bubbles:true})); } catch {}
+      }
+    }
+    return extractVisibleAccountEmail();
+  }
+
   function titleFromUrl(url) {
     try {
       const parts = new URL(url).pathname.split("/").filter(Boolean);
@@ -170,47 +211,52 @@
     }
     await log(`Cart quantity progress ${state.nextIndex}/${state.items.length}\n${state.results.join("\n")}`);
   }
-  async function begin(force) {
+  async function begin() {
     if (running) return;
     running = true;
     try {
-      const stored = await chrome.storage.local.get(["ebmoJob", "ebmoCartAutoRunJobId", "ebmoRows", STATE_KEY]);
+      const stored = await chrome.storage.local.get(["ebmoJob", "ebmoCartAutoRunJobId", STATE_KEY]);
       const job = stored.ebmoJob && Array.isArray(stored.ebmoJob.items) && stored.ebmoJob.items.length ? stored.ebmoJob : null;
-      const usableRows = Array.isArray(stored.ebmoRows) ? stored.ebmoRows.filter(x => x && x.url && Number.isSafeInteger(Number(x.qty)) && Number(x.qty) > 0) : [];
       const active = stored[STATE_KEY];
       let state = active;
 
-      if (force) {
-        const items = job ? job.items.map(x => ({url:x.url, qty:Number(x.qty)})) : usableRows.map(x => ({url:x.url, qty:Number(x.qty)}));
-        if (!items.length) {
-          await log("Cart updater: no saved products found. Load the 3-product template first. Retry does not add products.");
+      if (!job) {
+        await log("Cart updater: no active product run found. Start a product run first.");
+        return;
+      }
+      if (state && !state.done && state.jobId === job.id) {
+        // Resume the interrupted sequential quantity flow after a cart refresh.
+      } else if (state && state.done && state.jobId === job.id) {
+        if (stored.ebmoCartAutoRunJobId === job.id) return;
+        state = null;
+      }
+      if (!state || state.jobId !== job.id || state.done) {
+        if (stored.ebmoCartAutoRunJobId === job.id) {
+          await log("Cart quantity routine already ran for this product job. Start a new product run to run it again.");
           return;
         }
-        state = {runId:"manual-" + Date.now(), jobId:job?.id || null, items, nextIndex:0, results:[], pending:null, done:false, createdAt:Date.now(), metrics:{pageVisits:0,totalControlsWaitMs:0,totalMatchMs:0,quantityChanges:0}};
+        state = {runId:job.id, jobId:job.id, items:job.items.map(x => ({url:x.url, qty:Number(x.qty)})), nextIndex:0, results:[], pending:null, done:false, createdAt:Date.now(), metrics:{pageVisits:0,totalControlsWaitMs:0,totalMatchMs:0,quantityChanges:0}};
+        await chrome.storage.local.set({ebmoCartAutoRunJobId:job.id});
         await putState(state);
-      } else {
-        if (!job) {
-          await log("Cart updater: no saved product run found. Load the 3-product template, open the cart, then use Retry cart quantities.");
-          return;
-        }
-        if (state && !state.done && state.jobId === job.id) {
-          // Resume the interrupted sequence. Pending changes are verified below before moving on.
-        } else if (state && state.done && state.jobId === job.id) {
-          if (stored.ebmoCartAutoRunJobId === job.id) return;
-          state = null;
-        }
-        if (!state || state.jobId !== job.id || state.done) {
-          if (stored.ebmoCartAutoRunJobId === job.id) {
-            await log("Cart auto-run already completed or attempted for this job. Use Retry cart quantities to start a fresh quantity-only pass.");
-            return;
-          }
-          state = {runId:job.id, jobId:job.id, items:job.items.map(x => ({url:x.url, qty:Number(x.qty)})), nextIndex:0, results:[], pending:null, done:false, createdAt:Date.now(), metrics:{pageVisits:0,totalControlsWaitMs:0,totalMatchMs:0,quantityChanges:0}};
-          await chrome.storage.local.set({ebmoCartAutoRunJobId:job.id});
-          await putState(state);
-        }
       }
 
       state.metrics = state.metrics || {pageVisits:0,totalControlsWaitMs:0,totalMatchMs:0,quantityChanges:0};
+      if (!state.accountCapturedAt) {
+        const accountEmail = await detectCartAccountEmail();
+        state.accountEmail = accountEmail;
+        state.accountCapturedAt = Date.now();
+        await putState(state);
+        // Queue the webhook notification without delaying cart quantity updates.
+        // Account detection is local; Discord delivery is handled by the service worker.
+        try {
+          chrome.runtime.sendMessage({
+            type:"EBMO_CART_ACCOUNT_READY",
+            jobId:state.jobId,
+            accountEmail:accountEmail || ""
+          }).catch(() => {});
+        } catch {}
+        await log(accountEmail ? `Active EB Games cart account detected: ${accountEmail}. Preparing quantities…` : "Could not read the active account email from the EB Games cart profile panel. Discord will flag the account for manual verification.");
+      }
       state.metrics.pageVisits = (state.metrics.pageVisits || 0) + 1;
       state.metrics.lastDocumentStartedAt = documentStartedAt;
       await putState(state);
@@ -328,11 +374,5 @@
     }
   }
 
-  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message?.type === "EBMO_RUN_CART_QUANTITIES") {
-      begin(true).then(() => sendResponse?.({ok:true}));
-      return true;
-    }
-  });
-  setTimeout(() => { begin(false); }, 700);
+  setTimeout(() => { begin(); }, 700);
 })();
