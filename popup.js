@@ -1,6 +1,8 @@
 const itemsEl = document.getElementById("items");
 const statusEl = document.getElementById("status");
 const startButton = document.getElementById("start");
+const discordWebhookInput = document.getElementById("discordWebhook");
+const discordStatusEl = document.getElementById("discordStatus");
 let rows = [];
 let saveTimer = null;
 let startInProgress = false;
@@ -45,6 +47,43 @@ function renderRows() {
     itemsEl.appendChild(card);
   });
 }
+
+function isValidDiscordWebhook(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && ["discord.com", "discordapp.com"].includes(url.hostname) && /^\/api\/webhooks\/\d+\/[^/]+$/.test(url.pathname);
+  } catch { return false; }
+}
+async function saveDiscordWebhook() {
+  const value = discordWebhookInput.value.trim();
+  if (value && !isValidDiscordWebhook(value)) {
+    discordStatusEl.textContent = "That doesn't look like a valid Discord webhook URL. Copy it from Discord → Server Settings → Integrations → Webhooks.";
+    return false;
+  }
+  await chrome.storage.local.set({ ebmoDiscordWebhook: value });
+  discordStatusEl.textContent = value ? "Webhook saved locally. Use Test notification to verify it." : "Webhook cleared. Discord notifications are disabled.";
+  return true;
+}
+document.getElementById("saveDiscord").addEventListener("click", async () => {
+  if (await saveDiscordWebhook()) statusEl.textContent = "Discord settings saved.";
+});
+document.getElementById("testDiscord").addEventListener("click", async () => {
+  if (!(await saveDiscordWebhook())) return;
+  if (!discordWebhookInput.value.trim()) {
+    discordStatusEl.textContent = "Paste and save a webhook URL before testing.";
+    return;
+  }
+  discordStatusEl.textContent = "Sending test notification…";
+  const button = document.getElementById("testDiscord");
+  button.disabled = true;
+  try {
+    const response = await chrome.runtime.sendMessage({ type: "EBMO_TEST_DISCORD" });
+    discordStatusEl.textContent = response?.ok ? "Test message sent to Discord. Check your channel." : `Test failed: ${response?.error || "No response from background service."}`;
+  } catch (error) {
+    discordStatusEl.textContent = `Test failed: ${error?.message || error}`;
+  } finally { button.disabled = false; }
+});
+
 async function updateStartAvailability() {
   const stored = await chrome.storage.local.get("ebmoJob");
   const running = !!stored.ebmoJob?.running;
@@ -52,11 +91,13 @@ async function updateStartAvailability() {
   startButton.textContent = startInProgress ? "Preparing run…" : (running ? "Run in progress…" : "Start adding to cart");
 }
 async function loadPopup() {
-  const stored = await chrome.storage.local.get(["ebmoRows", "ebmoStatus"]);
+  const stored = await chrome.storage.local.get(["ebmoRows", "ebmoStatus", "ebmoDiscordWebhook"]);
   rows = Array.isArray(stored.ebmoRows) ? stored.ebmoRows : [];
   if (!rows.length) rows = [newRow()];
   renderRows();
   if (stored.ebmoStatus) statusEl.textContent = stored.ebmoStatus;
+  discordWebhookInput.value = stored.ebmoDiscordWebhook || "";
+  discordStatusEl.textContent = stored.ebmoDiscordWebhook ? "Webhook saved in this Chrome profile." : "Notifications disabled until you save a webhook.";
   await updateStartAvailability();
 }
 

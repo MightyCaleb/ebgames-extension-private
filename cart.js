@@ -223,7 +223,9 @@
       state.metrics.totalControlsWaitMs = (state.metrics.totalControlsWaitMs || 0) + (pageControlsReadyAt - controlsWaitStartedAt);
       await putState(state);
       if (!controls.length) {
-        await log(`Cart updater: no quantity dropdowns found. Found ${document.querySelectorAll("select").length} select elements on ${location.pathname}.`);
+        const message = `Cart updater: no quantity dropdowns found. Found ${document.querySelectorAll("select").length} select elements on ${location.pathname}.`;
+        await log(message);
+        try { chrome.runtime.sendMessage({ type:"EBMO_CART_FINISHED", payload:{ failed:true, productCount:state.items.length, pageVisits:state.metrics.pageVisits || 1, quantityChanges:state.metrics.quantityChanges || 0, results:[message] } }).catch(() => {}); } catch {}
         return;
       }
 
@@ -303,8 +305,24 @@
       const metrics = state.metrics || {};
       const cartTiming = `Cart timing: ${(cartElapsedMs/1000).toFixed(1)}s total; ${metrics.pageVisits || 1} cart page visit(s); controls wait ${metrics.totalControlsWaitMs || 0}ms; product matching ${metrics.totalMatchMs || 0}ms; ${metrics.quantityChanges || 0} quantity change(s).`;
       await log(`${addInfo}\n${cartTiming}\n\nCart quantity check finished.\n${state.results.join("\n")}\nVerify the visible quantities and totals manually. No checkout was performed.`);
+      try {
+        chrome.runtime.sendMessage({
+          type: "EBMO_CART_FINISHED",
+          payload: {
+            jobId: state.jobId,
+            productCount: state.items.length,
+            pageVisits: metrics.pageVisits || 1,
+            quantityChanges: metrics.quantityChanges || 0,
+            durationMs: cartElapsedMs,
+            results: state.results,
+            failed: state.results.some(line => /FAILED|couldn.t confidently|could not/i.test(String(line)))
+          }
+        }).catch(() => {});
+      } catch {}
     } catch (e) {
+      const message = `Cart updater error: ${e?.message || e}`;
       await log(`Cart updater error: ${e?.stack || e}`);
+      try { chrome.runtime.sendMessage({ type:"EBMO_CART_FINISHED", payload:{ failed:true, results:[message] } }).catch(() => {}); } catch {}
     } finally {
       running = false;
     }

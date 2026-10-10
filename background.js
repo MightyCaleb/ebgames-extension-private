@@ -5,6 +5,7 @@ const MESSAGE_RETRIES = 6;
 const MESSAGE_RETRY_DELAY_MS = 250;
 
 const deliveredTabs = new Set();
+const pendingDiscordNotifications = new Set();
 let resultQueue = Promise.resolve();
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -13,6 +14,98 @@ async function readJob() {
 }
 async function writeStatus(ebmoStatus) {
   await chrome.storage.local.set({ ebmoStatus });
+}
+
+function productTitleFromUrl(url) {
+  try {
+    const parts = new URL(url).pathname.split("/").filter(Boolean);
+    let slug = parts.at(-1) || "EB Games product";
+    slug = slug.replace(/^\d+-/, "").replace(/-\d+$/, "").replace(/-/g, " ");
+    return decodeURIComponent(slug).replace(/\s+/g, " ").trim().slice(0, 180) || "EB Games product";
+  } catch { return "EB Games product"; }
+}
+function isDiscordWebhookUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && ["discord.com", "discordapp.com"].includes(url.hostname) && /^\/api\/webhooks\/\d+\/[^/]+$/.test(url.pathname);
+  } catch { return false; }
+}
+async function postDiscordEmbed({ title, description, color = 0x5865F2, fields = [] }) {
+  const { ebmoDiscordWebhook } = await chrome.storage.local.get("ebmoDiscordWebhook");
+  if (!ebmoDiscordWebhook) return { ok:false, error:"No Discord webhook is saved." };
+  if (!isDiscordWebhookUrl(ebmoDiscordWebhook)) return { ok:false, error:"Saved Discord webhook URL is invalid." };
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+  try {
+    const response = await fetch(ebmoDiscordWebhook, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username: "EB Games Helper",
+        embeds: [{
+          title: String(title || "EB Games Helper").slice(0, 256),
+          description: String(description || "").slice(0, 3800),
+          color,
+          fields: fields.slice(0, 10).map(field => ({
+            name: String(field.name || "Details").slice(0, 256),
+            value: String(field.value || "—").slice(0, 1000),
+            inline: !!field.inline
+          })),
+          timestamp: new Date().toISOString(),
+          footer: { text: "Add-to-cart and cart-preparation status only; no checkout or payment was performed." }
+        }]
+      }),
+      signal: controller.signal,
+      cache: "no-store",
+      credentials: "omit"
+    });
+    if (!response.ok) return { ok:false, error:`Discord returned HTTP ${response.status}. Check the webhook URL and channel.` };
+    return { ok:true };
+  } catch (error) {
+    return { ok:false, error:error?.name === "AbortError" ? "Discord request timed out." : "Could not reach Discord. Check your connection and webhook URL." };
+  } finally { clearTimeout(timeout); }
+}
+function notifyDiscordInBackground(payload) {
+  // Start notifications immediately without blocking cart navigation. The product-message
+  // event waits for these tracked requests before its response closes, keeping the MV3
+  // service worker alive long enough to finish short webhook requests.
+  const task = postDiscordEmbed(payload).catch(() => ({ ok:false }));
+  pendingDiscordNotifications.add(task);
+  task.finally(() => pendingDiscordNotifications.delete(task));
+  return task;
+}
+function productResultNotification(job, result) {
+  const title = productTitleFromUrl(result.url || job.items?.[result.index]?.url || "");
+  const confirmed = !!result.confirmed;
+  const timing = result.timings?.clickToSignalMs;
+  const description = [
+    `**Product:** ${title}`,
+    `**Requested cart quantity:** ${Number.isFinite(Number(result.qty)) ? result.qty : "not recorded"}`,
+    `**Result:** ${confirmed ? "Confirmation detected" : "NOT CONFIRMED"}`,
+    result.message ? `**Details:** ${String(result.message).slice(0, 500)}` : "",
+    Number.isFinite(timing) ? `**Click → confirmation:** ${timing} ms` : ""
+  ].filter(Boolean).join("\n");
+  notifyDiscordInBackground({
+    title: confirmed ? "✅ EB Games — Product add confirmed" : "⚠️ EB Games — Product add needs checking",
+    description,
+    color: confirmed ? 0x2ECC71 : 0xE74C3C,
+    fields: [{ name:"Run progress", value:`Product ${Number(result.index) + 1} of ${job.items?.length || "?"}`, inline:true }]
+  });
+}
+function cartFinishedNotification(payload = {}) {
+  const results = Array.isArray(payload.results) ? payload.results : [];
+  const failures = results.filter(line => /FAILED|couldn.t confidently|could not/i.test(String(line))).length;
+  const title = payload.failed || failures > 0 ? "⚠️ EB Games — Cart preparation needs review" : "✅ EB Games — Cart preparation finished";
+  const description = [
+    `**Products checked:** ${Number(payload.productCount) || results.length || "unknown"}`,
+    `**Cart page visits:** ${Number(payload.pageVisits) || "unknown"}`,
+    `**Quantity changes attempted:** ${Number(payload.quantityChanges) || 0}`,
+    Number.isFinite(Number(payload.durationMs)) ? `**Elapsed:** ${(Number(payload.durationMs) / 1000).toFixed(1)} s` : "",
+    "",
+    ...results.slice(0, 8).map(line => `• ${String(line).slice(0, 700)}`),
+    results.length > 8 ? `…plus ${results.length - 8} more result(s)` : ""
+  ].filter(Boolean).join("\n");
+  return postDiscordEmbed({ title, description, color: payload.failed || failures > 0 ? 0xE74C3C : 0x2ECC71 });
 }
 function enqueueResult(jobId, result) {
   // Serialise storage writes so simultaneous product results cannot overwrite each other.
@@ -70,16 +163,35 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   }
 });
 
-chrome.runtime.onMessage.addListener((message, sender) => {
-  if (message?.type !== "EBMO_PRODUCT_DONE" || !message.jobId || !message.result) return;
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === "EBMO_TEST_DISCORD") {
+    postDiscordEmbed({
+      title: "✅ EB Games Helper — Test notification",
+      description: "Your Discord webhook is configured correctly. You will receive product-add results and cart-preparation summaries here.",
+      color: 0x5865F2
+    }).then(sendResponse).catch(error => sendResponse({ ok:false, error:error?.message || "Test failed." }));
+    return true;
+  }
 
-  const tabId = sender?.tab?.id;
-  enqueueResult(message.jobId, message.result).then(async accepted => {
-    // Close the tab only for a confirmed result belonging to the active job.
-    if (accepted && message.result.confirmed && Number.isInteger(tabId)) {
-      try { await chrome.tabs.remove(tabId); } catch {}
-    }
-  });
+  if (message?.type === "EBMO_CART_FINISHED") {
+    cartFinishedNotification(message.payload || {}).then(sendResponse).catch(error => sendResponse({ ok:false, error:error?.message || "Discord notification failed." }));
+    return true;
+  }
+
+  if (message?.type === "EBMO_PRODUCT_DONE" && message.jobId && message.result) {
+    const tabId = sender?.tab?.id;
+    enqueueResult(message.jobId, message.result).then(async accepted => {
+      // Close the tab only for a confirmed result belonging to the active job.
+      if (accepted && message.result.confirmed && Number.isInteger(tabId)) {
+        try { await chrome.tabs.remove(tabId); } catch {}
+      }
+      // Wait briefly for any product notification without slowing the cart opening itself;
+      // recordResult has already moved the workflow forward.
+      await Promise.all([...pendingDiscordNotifications]);
+      sendResponse?.({ accepted: !!accepted });
+    }).catch(error => sendResponse?.({ accepted:false, error:error?.message || "Failed to record product result." }));
+    return true;
+  }
 });
 
 async function recordResult(jobId, result) {
@@ -92,6 +204,8 @@ async function recordResult(jobId, result) {
 
   job.completed.push(result);
   job.log.push(result);
+  // Notify without waiting for the network, so Discord never slows down product handling.
+  productResultNotification(job, result);
   const completedCount = job.completed.length;
   const total = job.items.length;
 

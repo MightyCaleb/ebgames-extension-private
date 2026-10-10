@@ -1,14 +1,14 @@
-EB Games Auto Checkout — Stable Core v1.8.0
+EB Games Auto Checkout — Changelog
 
-This is a low-risk backend/orchestration refactor based on the v1.7.1 baseline.
+1.9.0 — Discord Notifications
+- Added optional Discord webhook configuration in the extension popup.
+- Added a Test notification button to verify the webhook.
+- Sends a notification for each product-add confirmation or unconfirmed result.
+- Sends a cart quantity-preparation summary including failures and elapsed time.
+- Webhook URL is stored in chrome.storage.local and is not embedded in source or release files.
+- No checkout/payment confirmation is claimed; final checkout remains manual.
+- Preserved parallel product tabs, success-confirmation tab closing, sequential cart refreshes, and existing cart logic.
 
-Changes:
-- Preserves the tested product-page and sequential cart-refresh scripts unchanged.
-- Guards against starting overlapping product-tab runs from the popup.
-- Centralises result queuing and makes background result recording idempotent.
-- Closes a confirmed product tab only when its result belongs to the active run.
-- Makes popup start-state handling more explicit.
-
-Not changed: checkout/payment automation, cart quantity event semantics, product click semantics, refresh wait timings.
-
-This build has not been live-tested against EB Games. Verify every visible quantity and cart total manually.
+1.8.0 — Stable Core
+- Added guarded runs and deduplicated product results.
+- Preserved parallel product tabs, sequential cart-refresh handling, and timing diagnostics.

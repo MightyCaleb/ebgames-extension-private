@@ -1,14 +1,16 @@
 {
   "manifest_version": 3,
-  "name": "Michael Caleb EB GAMES AUTO CHECKOUT V 6.9 - Stable Core",
-  "version": "1.8.0",
-  "description": "Stable orchestration refactor with guarded runs, deduplicated results, parallel product tabs, and sequential cart-refresh handling.",
+  "name": "Michael Caleb EB GAMES AUTO CHECKOUT V 6.9 - Discord Notifications",
+  "version": "1.9.0",
+  "description": "Stable Core with parallel product tabs, sequential cart-refresh handling, timing diagnostics, and optional Discord webhook notifications.",
   "permissions": [
     "storage",
     "tabs"
   ],
   "host_permissions": [
-    "https://www.ebgames.com.au/*"
+    "https://www.ebgames.com.au/*",
+    "https://discord.com/*",
+    "https://discordapp.com/*"
   ],
   "action": {
     "default_title": "Michael Caleb EB GAMES AUTO CHECKOUT V 6.9",
